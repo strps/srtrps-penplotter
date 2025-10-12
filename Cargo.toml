@@ -1,0 +1,11 @@
+[package]
+name = "strps_penploter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+usvg = "0.45.1"
+lyon = "1.0.16"
+axum = {version = "0.8.6", features = ["json", "multipart"]}
+tokio = { version = "1.47.1", features = ["full"] }
+serde = "1.0.228"
