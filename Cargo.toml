@@ -5,7 +5,11 @@ edition = "2024"
 
 [dependencies]
 usvg = "0.45.1"
-lyon = "1.0.16"
-axum = {version = "0.8.6", features = ["json", "multipart"]}
+axum = { version = "0.8.6", features = ["json", "multipart"] }
 tokio = { version = "1.47.1", features = ["full"] }
-serde = "1.0.228"
+serde = { version = "1.0.228", features = ["derive"] }
+tower-http = { version = "0.6.6", features = ["fs", "cors"] }
+lyon = "1.0.16"
+lyon_tessellation = "1.0.16"
+lyon_algorithms = "1.0.16"
+lyon_geom = "1.0.16"

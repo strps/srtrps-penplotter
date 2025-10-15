@@ -1,0 +1,6 @@
+[bacon]
+# Show stdout in the bacon output
+show_stdout = true
+
+# Show stderr in the bacon output
+show_stderr = true
