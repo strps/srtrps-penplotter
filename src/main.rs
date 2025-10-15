@@ -8,17 +8,15 @@ use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
 mod gcode;
-use gcode::{svg_bytes_to_gcode, PlotterTransform, ReferencePoint};
+use gcode::{parser::{parse_svg, extract_paths}, geometry::flatten_path, output::generate_full_gcode};
 
 #[derive(Debug, Deserialize)]
 struct ConvertParams {
-    samples: Option<usize>,
     tolerance: Option<f64>,
     feedrate: Option<f64>,
     pen_down: Option<String>,
     pen_up: Option<String>,
     reference_point: Option<String>, // e.g., "bottom_left"
-    flip_y: Option<bool>,
     output: Option<String>,          // e.g., "plot1.gcode"
 }
 
@@ -54,37 +52,19 @@ async fn convert_svg(
     };
 
     // --- Default values ---
-    let samples = params.samples.unwrap_or(10);
     let tolerance = params.tolerance;
     let feedrate = params.feedrate.unwrap_or(1000.0);
     let pen_down = params.pen_down.unwrap_or_else(|| "M3 S1000".to_string());
     let pen_up = params.pen_up.unwrap_or_else(|| "M5".to_string());
-    // Parse reference point string to enum
-    let reference_point = match params.reference_point.unwrap_or_else(|| "bottom_left".to_string()).as_str() {
-        "bottom_left" => ReferencePoint::BottomLeft,
-        "top_left" => ReferencePoint::TopLeft,
-        "center" => ReferencePoint::Center,
-        _ => ReferencePoint::BottomLeft, // fallback to bottom_left for unknown values
-    };
-    let flip_y = params.flip_y.unwrap_or(true);
-
-    // --- Plotter transform ---
-    let plotter_transform = PlotterTransform {
-        reference_point,
-        flip_y,
-        offset_x: 0.0,
-        offset_y: 0.0,
-    };
 
     // --- Generate G-code ---
-    let gcode = svg_bytes_to_gcode(
+    let gcode = generate_gcode_from_svg(
         &svg,
-        samples,
         tolerance,
         feedrate,
         &pen_down,
         &pen_up,
-        &plotter_transform,
+        params.reference_point.as_deref(),
     );
 
     // --- Optional file output ---
@@ -105,4 +85,40 @@ async fn convert_svg(
         .header("Content-Type", "text/plain")
         .body(gcode.into())
         .unwrap()
+}
+
+/// Generates G-code from SVG data using the new modules.
+/// This replaces the old svg_bytes_to_gcode function.
+fn generate_gcode_from_svg(
+    svg_data: &[u8],
+    tolerance: Option<f64>,
+    feedrate: f64,
+    pen_down: &str,
+    pen_up: &str,
+    reference_point: Option<&str>,
+) -> String {
+    // Parse SVG
+    let tree = match parse_svg(svg_data) {
+        Ok(t) => t,
+        Err(e) => return format!("❌ SVG parsing failed: {}", e),
+    };
+
+    // Extract paths
+    let bez_paths = match extract_paths(&tree, reference_point) {
+        Ok(paths) => paths,
+        Err(e) => return format!("❌ Path extraction failed: {}", e),
+    };
+
+    // Flatten paths (no transform for now)
+    let mut all_points = Vec::new();
+    for bez_path in bez_paths {
+        let points = flatten_path(&bez_path, tolerance);
+
+        if !points.is_empty() {
+            all_points.push(points);
+        }
+    }
+
+    // Generate G-code
+    generate_full_gcode(&all_points, feedrate, pen_down, pen_up)
 }

@@ -851,9 +851,9 @@ name = "strps_penploter"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "kurbo",
  "lyon",
  "lyon_algorithms",
- "lyon_geom",
  "lyon_tessellation",
  "serde",
  "tokio",
