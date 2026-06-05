@@ -28,7 +28,7 @@ function App() {
     formData.append('pattern', pattern)
 
     try {
-      const response = await fetch('http://localhost:3000/api/convert', {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/convert`, {
         method: 'POST',
         body: formData,
       })

@@ -358,6 +358,7 @@ pub enum ReferencePoint {
     BottomLeft,
     TopLeft,
     Center,
+    // #[allow(dead_code)]
     Custom(f64, f64),
 }
 

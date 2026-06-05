@@ -1,50 +1,50 @@
 use axum::{
-    extract::{Multipart, Query},
+    extract::Multipart,
     response::IntoResponse,
     routing::post,
     Router,
 };
-use serde::Deserialize;
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
+use tower_http::cors::CorsLayer;
 
 mod gcode;
 use gcode::{svg_bytes_to_gcode, PlotterTransform, ReferencePoint};
 
-#[derive(Debug, Deserialize)]
-struct ConvertParams {
-    samples: Option<usize>,
-    tolerance: Option<f64>,
-    feedrate: Option<f64>,
-    pen_down: Option<String>,
-    pen_up: Option<String>,
-    reference_point: Option<String>, // e.g., "bottom_left"
-    flip_y: Option<bool>,
-    output: Option<String>,          // e.g., "plot1.gcode"
-}
-
 #[tokio::main]
 async fn main() {
-    let app = Router::new().route("/convert", post(convert_svg));
+    let app = Router::new()
+        .route("/api/convert", post(convert_svg))
+        .layer(CorsLayer::permissive());
+    
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3005".to_string());
+    let addr = format!("0.0.0.0:{}", port);
 
-    println!("🚀 Server running at http://0.0.0.0:3000");
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("❌ Failed to bind address");
+        .unwrap_or_else(|_| panic!("❌ Failed to bind address {}. Is the port already in use?", addr));
+
+    println!("🚀 Server running at http://{}", addr);
 
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn convert_svg(
-    Query(params): Query<ConvertParams>,
-    mut multipart: Multipart,
-) -> impl IntoResponse {
+async fn convert_svg(mut multipart: Multipart) -> impl IntoResponse {
     let mut svg_data: Option<Vec<u8>> = None;
+    let mut fields: HashMap<String, String> = HashMap::new();
 
-    // Read uploaded SVG file
+    // Read uploaded SVG file and form fields
     while let Some(field) = multipart.next_field().await.unwrap() {
-        if field.name() == Some("file") {
-            svg_data = Some(field.bytes().await.unwrap().to_vec());
+        match field.name() {
+            Some("file") => {
+                svg_data = Some(field.bytes().await.unwrap().to_vec());
+            }
+            Some(name) => {
+                let name = name.to_string();
+                if let Ok(value) = field.text().await {
+                    fields.insert(name, value);
+                }
+            }
+            None => {}
         }
     }
 
@@ -54,19 +54,40 @@ async fn convert_svg(
     };
 
     // --- Default values ---
-    let samples = params.samples.unwrap_or(10);
-    let tolerance = params.tolerance;
-    let feedrate = params.feedrate.unwrap_or(1000.0);
-    let pen_down = params.pen_down.unwrap_or_else(|| "M3 S1000".to_string());
-    let pen_up = params.pen_up.unwrap_or_else(|| "M5".to_string());
+    let samples = fields
+        .get("samples")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let tolerance = fields.get("tolerance").and_then(|v| v.parse().ok());
+    let feedrate = fields
+        .get("feedrate")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000.0);
+    let pen_down = fields
+        .get("pen_down")
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "M3 S1000".to_string());
+    let pen_up = fields
+        .get("pen_up")
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "M5".to_string());
     // Parse reference point string to enum
-    let reference_point = match params.reference_point.unwrap_or_else(|| "bottom_left".to_string()).as_str() {
+    let reference_point = match fields
+        .get("reference_point")
+        .map(|s| s.as_str())
+        .unwrap_or("bottom_left")
+    {
         "bottom_left" => ReferencePoint::BottomLeft,
         "top_left" => ReferencePoint::TopLeft,
         "center" => ReferencePoint::Center,
         _ => ReferencePoint::BottomLeft, // fallback to bottom_left for unknown values
     };
-    let flip_y = params.flip_y.unwrap_or(true);
+    let flip_y = fields
+        .get("flip_y")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(true);
 
     // --- Plotter transform ---
     let plotter_transform = PlotterTransform {
@@ -88,7 +109,7 @@ async fn convert_svg(
     );
 
     // --- Optional file output ---
-    if let Some(filename) = params.output {
+    if let Some(filename) = fields.get("output") {
         let output_dir = PathBuf::from("./output");
         if let Err(e) = fs::create_dir_all(&output_dir) {
             eprintln!("⚠️ Failed to create output directory: {}", e);
