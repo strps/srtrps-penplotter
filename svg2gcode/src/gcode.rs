@@ -121,43 +121,56 @@ fn process_path(
     // so we maintain current_pos while we iterate.
     let sk_path: &SkiaPath = path.data();
     let mut current_pos = (0.0f64, 0.0f64);
-    let mut all_points: Vec<(f64, f64)> = Vec::new();
+    // Start of the current subpath, needed so Close can draw back to it
+    let mut subpath_start = (0.0f64, 0.0f64);
+    // Each MoveTo starts a new subpath, drawn as a separate pen-down stroke
+    let mut subpaths: Vec<Vec<(f64, f64)>> = Vec::new();
 
     for seg in sk_path.segments() {
-        // produce points in object coordinates using current_pos
-        let pts = segment_to_points(&seg, current_pos, samples, tolerance);
-        if !pts.is_empty() {
-            // update current position to last sampled point (segments are absolute)
-            current_pos = *pts.last().unwrap();
-            // apply absolute transform to each point and push to all_points
-            for (x, y) in pts {
-                // Transform::map_point needs a tiny_skia_path::Point
-                let mut p = SkPoint::from_xy(x as f32, y as f32);
-                transform.map_point(&mut p);
-                let (px, py) = to_plotter_coords(p.x as f64, p.y as f64, tree, plotter_transform);
-                all_points.push((px, py));
+        let pts = match seg {
+            PathSegment::MoveTo(p) => {
+                subpath_start = (p.x as f64, p.y as f64);
+                subpaths.push(Vec::new());
+                vec![subpath_start]
             }
+            PathSegment::Close => vec![subpath_start],
+            // produce points in object coordinates using current_pos
+            _ => segment_to_points(&seg, current_pos, samples, tolerance),
+        };
+        if pts.is_empty() {
+            continue;
+        }
+        // update current position to last sampled point (segments are absolute)
+        current_pos = *pts.last().unwrap();
+        if subpaths.is_empty() {
+            subpaths.push(Vec::new());
+        }
+        let points = subpaths.last_mut().unwrap();
+        // apply absolute transform to each point
+        for (x, y) in pts {
+            // Transform::map_point needs a tiny_skia_path::Point
+            let mut p = SkPoint::from_xy(x as f32, y as f32);
+            transform.map_point(&mut p);
+            points.push(to_plotter_coords(p.x as f64, p.y as f64, tree, plotter_transform));
         }
     }
 
-    if all_points.is_empty() {
-        return;
-    }
-
-    // Emit G-code for the path:
+    // Emit G-code for each subpath:
     // Move (pen up) to first point, lower pen, draw, raise pen.
-    let (sx, sy) = all_points[0];
-    gcode.push(format!("; --- path start ---"));
-    gcode.push(format!("G0 X{:.3} Y{:.3}", sx, sy)); // rapid move to start
-    gcode.push(format!("{} ; pen up", pen_up));
-    gcode.push(format!("{} ; pen down", pen_down));
+    for points in subpaths.iter().filter(|p| p.len() > 1) {
+        let (sx, sy) = points[0];
+        gcode.push(format!("; --- path start ---"));
+        gcode.push(format!("G0 X{:.3} Y{:.3}", sx, sy)); // rapid move to start
+        gcode.push(format!("{} ; pen up", pen_up));
+        gcode.push(format!("{} ; pen down", pen_down));
 
-    for &(x, y) in all_points.iter().skip(1) {
-        gcode.push(format!("G1 X{:.3} Y{:.3} F{}", x, y, feedrate));
+        for &(x, y) in points.iter().skip(1) {
+            gcode.push(format!("G1 X{:.3} Y{:.3} F{}", x, y, feedrate));
+        }
+
+        gcode.push(format!("{} ; pen up", pen_up));
+        gcode.push(format!("; --- path end ---"));
     }
-
-    gcode.push(format!("{} ; pen up", pen_up));
-    gcode.push(format!("; --- path end ---"));
 }
 
 /// Convert a single PathSegment into a sequence of sampled points in *object coordinates*
@@ -214,7 +227,7 @@ fn segment_to_points(
             }
         }
         PathSegment::Close => {
-            // nothing to add (could return to subpath start if you track it)
+            // handled in process_path, which tracks the subpath start
         }
     }
 
